@@ -8,13 +8,13 @@ import NoiseSuppressorWorklet from "@timephy/rnnoise-wasm/NoiseSuppressorWorklet
 function App() {
   let audioContext: AudioContext | null = null
   let mediaStream: MediaStream | null = null
-  let destinationRaw: MediaStreamAudioDestinationNode | null = null
-  let destinationProcessed: MediaStreamAudioDestinationNode | null = null
-  let recorderRaw: MediaRecorder | null = null
-  let recorderProcessed: MediaRecorder | null = null
-  let rawChunks: Blob[] = []
-  let processedChunks: Blob[] = []
-  let recordingStartTime: number | null = null
+  // let destinationRaw: MediaStreamAudioDestinationNode | null = null
+  // let destinationProcessed: MediaStreamAudioDestinationNode | null = null
+  // let recorderRaw: MediaRecorder | null = null
+  // let recorderProcessed: MediaRecorder | null = null
+  // let rawChunks: Blob[] = []
+  // let processedChunks: Blob[] = []
+  // let recordingStartTime: number | null = null
   const mediaConstraints: MediaStreamConstraints = {
     audio: {
       channelCount: 1,
@@ -121,91 +121,91 @@ function App() {
     }
   }
 
-  function startRecorders() {
-    if (!destinationRaw || !destinationProcessed) return
-    const mime = (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
-      ? 'audio/webm;codecs=opus'
-      : undefined
+  // function startRecorders() {
+  //   if (!destinationRaw || !destinationProcessed) return
+  //   const mime = (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))
+  //     ? 'audio/webm;codecs=opus'
+  //     : undefined
 
-    rawChunks = []
-    processedChunks = []
-    recordingStartTime = Date.now()
+  //   rawChunks = []
+  //   processedChunks = []
+  //   recordingStartTime = Date.now()
 
-    recorderRaw = new MediaRecorder(destinationRaw.stream, mime ? { mimeType: mime } as MediaRecorderOptions : undefined)
-    recorderProcessed = new MediaRecorder(destinationProcessed.stream, mime ? { mimeType: mime } as MediaRecorderOptions : undefined)
+  //   recorderRaw = new MediaRecorder(destinationRaw.stream, mime ? { mimeType: mime } as MediaRecorderOptions : undefined)
+  //   recorderProcessed = new MediaRecorder(destinationProcessed.stream, mime ? { mimeType: mime } as MediaRecorderOptions : undefined)
 
-    recorderRaw.ondataavailable = (e: BlobEvent) => {
-      if (e.data && e.data.size > 0) rawChunks.push(e.data)
-    }
-    recorderProcessed.ondataavailable = (e: BlobEvent) => {
-      if (e.data && e.data.size > 0) processedChunks.push(e.data)
-    }
+  //   recorderRaw.ondataavailable = (e: BlobEvent) => {
+  //     if (e.data && e.data.size > 0) rawChunks.push(e.data)
+  //   }
+  //   recorderProcessed.ondataavailable = (e: BlobEvent) => {
+  //     if (e.data && e.data.size > 0) processedChunks.push(e.data)
+  //   }
 
-    // Usar timeslice para forzar vaciado periódico de buffers
-    const sliceMs = 1000
-    recorderRaw.start(sliceMs)
-    recorderProcessed.start(sliceMs)
-  }
+  //   // Usar timeslice para forzar vaciado periódico de buffers
+  //   const sliceMs = 1000
+  //   recorderRaw.start(sliceMs)
+  //   recorderProcessed.start(sliceMs)
+  // }
 
-  async function stopAndSaveRecordings() {
-    type DownloadResult = { blob: Blob, filename: string } | null
-    const started = Boolean(recorderRaw || recorderProcessed)
-    if (!started) return
+  // async function stopAndSaveRecordings() {
+  //   type DownloadResult = { blob: Blob, filename: string } | null
+  //   const started = Boolean(recorderRaw || recorderProcessed)
+  //   if (!started) return
 
-    const buildResult = (type: 'raw' | 'rnnoise'): DownloadResult => {
-      const chunks = type === 'raw' ? rawChunks : processedChunks
-      if (!chunks.length) return null
-      const blob = new Blob(chunks, { type: 'audio/webm' })
-      const ts = recordingStartTime ? new Date(recordingStartTime).toISOString().replace(/[:.]/g, '-') : Date.now().toString()
-      const filename = type === 'raw' ? `audio_raw-${ts}.webm` : `audio_rnnoise-${ts}.webm`
-      return { blob, filename }
-    }
+  //   const buildResult = (type: 'raw' | 'rnnoise'): DownloadResult => {
+  //     const chunks = type === 'raw' ? rawChunks : processedChunks
+  //     if (!chunks.length) return null
+  //     const blob = new Blob(chunks, { type: 'audio/webm' })
+  //     const ts = recordingStartTime ? new Date(recordingStartTime).toISOString().replace(/[:.]/g, '-') : Date.now().toString()
+  //     const filename = type === 'raw' ? `audio_raw-${ts}.webm` : `audio_rnnoise-${ts}.webm`
+  //     return { blob, filename }
+  //   }
 
-    const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+  //   const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
-    let rawPromise: Promise<DownloadResult> | null = null
-    let processedPromise: Promise<DownloadResult> | null = null
+  //   let rawPromise: Promise<DownloadResult> | null = null
+  //   let processedPromise: Promise<DownloadResult> | null = null
 
-    if (recorderRaw) {
-      rawPromise = new Promise<DownloadResult>(resolve => {
-        recorderRaw!.onstop = () => resolve(buildResult('raw'))
-      })
-      try { recorderRaw.requestData() } catch (err) { console.warn('requestData RAW falló', err) }
-      if (recorderRaw.state !== 'inactive') recorderRaw.stop()
-    }
-    if (recorderProcessed) {
-      processedPromise = new Promise<DownloadResult>(resolve => {
-        recorderProcessed!.onstop = () => resolve(buildResult('rnnoise'))
-      })
-      try { recorderProcessed.requestData() } catch (err) { console.warn('requestData RNNOISE falló', err) }
-      if (recorderProcessed.state !== 'inactive') recorderProcessed.stop()
-    }
+  //   if (recorderRaw) {
+  //     rawPromise = new Promise<DownloadResult>(resolve => {
+  //       recorderRaw!.onstop = () => resolve(buildResult('raw'))
+  //     })
+  //     try { recorderRaw.requestData() } catch (err) { console.warn('requestData RAW falló', err) }
+  //     if (recorderRaw.state !== 'inactive') recorderRaw.stop()
+  //   }
+  //   if (recorderProcessed) {
+  //     processedPromise = new Promise<DownloadResult>(resolve => {
+  //       recorderProcessed!.onstop = () => resolve(buildResult('rnnoise'))
+  //     })
+  //     try { recorderProcessed.requestData() } catch (err) { console.warn('requestData RNNOISE falló', err) }
+  //     if (recorderProcessed.state !== 'inactive') recorderProcessed.stop()
+  //   }
 
-    recorderRaw = null
-    recorderProcessed = null
+  //   recorderRaw = null
+  //   recorderProcessed = null
 
-    const promises: Array<Promise<DownloadResult>> = []
-    if (rawPromise) promises.push(rawPromise)
-    if (processedPromise) promises.push(processedPromise)
-    const results = await Promise.all(promises)
+  //   const promises: Array<Promise<DownloadResult>> = []
+  //   if (rawPromise) promises.push(rawPromise)
+  //   if (processedPromise) promises.push(processedPromise)
+  //   const results = await Promise.all(promises)
 
-    for (const res of results) {
-      if (!res) continue
-      const url = URL.createObjectURL(res.blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = res.filename
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
-      await delay(1200)
-    }
-  }
+  //   for (const res of results) {
+  //     if (!res) continue
+  //     const url = URL.createObjectURL(res.blob)
+  //     const a = document.createElement('a')
+  //     a.href = url
+  //     a.download = res.filename
+  //     document.body.appendChild(a)
+  //     a.click()
+  //     a.remove()
+  //     URL.revokeObjectURL(url)
+  //     await delay(1200)
+  //   }
+  // }
 
   function stop() {
     // Detener y guardar grabaciones si existen
-    try { stopAndSaveRecordings() } catch (e) { console.error(e) }
+    // try { stopAndSaveRecordings() } catch (e) { console.error(e) }
     if (mediaStream) {
       mediaStream.getTracks().forEach(track => track.stop())
       mediaStream = null
