@@ -1,20 +1,21 @@
 
 import './App.css'
 
+import { useRef } from 'react'
 import { NoiseSuppressorWorklet_Name } from "@timephy/rnnoise-wasm"
 import NoiseSuppressorWorklet from "@timephy/rnnoise-wasm/NoiseSuppressorWorklet?worker&url"
 
 
 function App() {
-  let audioContext: AudioContext | null = null
-  let mediaStream: MediaStream | null = null
-  // let destinationRaw: MediaStreamAudioDestinationNode | null = null
-  // let destinationProcessed: MediaStreamAudioDestinationNode | null = null
-  // let recorderRaw: MediaRecorder | null = null
-  // let recorderProcessed: MediaRecorder | null = null
-  // let rawChunks: Blob[] = []
-  // let processedChunks: Blob[] = []
-  // let recordingStartTime: number | null = null
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const rnnoiseNodeRef = useRef<AudioWorkletNode | null>(null)
+  const processedMergerRef = useRef<ChannelMergerNode | null>(null)
+  const rawGainRef = useRef<GainNode | null>(null)
+  const processedGainRef = useRef<GainNode | null>(null)
+  const workletLoadedRef = useRef<boolean>(false)
+
   const mediaConstraints: MediaStreamConstraints = {
     audio: {
       channelCount: 1,
@@ -25,17 +26,43 @@ function App() {
     } as MediaTrackConstraints
   }
 
-  async function start() {
-    try {
-      if (audioContext) {
-        stop()
-      }
-      audioContext = new AudioContext({ sampleRate: 48000 })
-      await audioContext.audioWorklet.addModule(NoiseSuppressorWorklet)
+  async function ensureAudioContext(): Promise<AudioContext> {
+    let ac = audioContextRef.current
+    if (!ac) {
+      ac = new AudioContext({ sampleRate: 48000 })
+      audioContextRef.current = ac
+    }
+    if (ac.state === 'suspended') {
+      try { await ac.resume() } catch (err) { console.warn('AudioContext.resume falló', err) }
+    }
+    return ac
+  }
 
-      // Crear nodo del supresor de ruido (mono explícito)
-      const noiseSuppressionNode = new AudioWorkletNode(
-        audioContext,
+  async function ensureMediaStream(): Promise<MediaStream> {
+    let stream = mediaStreamRef.current
+    if (!stream) {
+      stream = await navigator.mediaDevices.getUserMedia(mediaConstraints)
+      mediaStreamRef.current = stream
+    }
+    return stream
+  }
+
+  async function ensureGraph() {
+    const ac = await ensureAudioContext()
+    const stream = await ensureMediaStream()
+
+    if (!sourceNodeRef.current) {
+      sourceNodeRef.current = ac.createMediaStreamSource(stream)
+    }
+
+    if (!workletLoadedRef.current) {
+      await ac.audioWorklet.addModule(NoiseSuppressorWorklet)
+      workletLoadedRef.current = true
+    }
+
+    if (!rnnoiseNodeRef.current) {
+      rnnoiseNodeRef.current = new AudioWorkletNode(
+        ac,
         NoiseSuppressorWorklet_Name,
         {
           channelCount: 1,
@@ -43,32 +70,61 @@ function App() {
           channelInterpretation: 'speakers'
         }
       )
+    }
 
-      // Pedir micrófono al usuario
-      mediaStream = await navigator.mediaDevices.getUserMedia(mediaConstraints)
-      const source = audioContext.createMediaStreamSource(mediaStream)
+    if (!processedMergerRef.current) {
+      processedMergerRef.current = ac.createChannelMerger(2)
+    }
 
-      // Conectar: micrófono → supresor → duplicar a estéreo → parlantes
-      const merger = audioContext.createChannelMerger(2)
-      source.connect(noiseSuppressionNode)
-      noiseSuppressionNode.connect(merger, 0, 0)
-      noiseSuppressionNode.connect(merger, 0, 1)
-      merger.connect(audioContext.destination)
+    if (!rawGainRef.current) {
+      rawGainRef.current = ac.createGain()
+      rawGainRef.current.gain.value = 0
+    }
+    if (!processedGainRef.current) {
+      processedGainRef.current = ac.createGain()
+      processedGainRef.current.gain.value = 0
+    }
 
-      //// Preparar destinos para grabación
-      // destinationRaw = audioContext.createMediaStreamDestination()
-      // destinationProcessed = audioContext.createMediaStreamDestination()
-      // // Grabar crudo desde la fuente (mono)
-      // source.connect(destinationRaw)
-      // // Grabar procesado directamente desde el nodo (mono)
-      // noiseSuppressionNode.connect(destinationProcessed)
+    // Conexiones (idempotentes):
+    const source = sourceNodeRef.current
+    const rnnoise = rnnoiseNodeRef.current
+    const merger = processedMergerRef.current
+    const rawGain = rawGainRef.current
+    const processedGain = processedGainRef.current
 
-      // // Iniciar grabadores
-      // startRecorders()
+    // Helper para desconectar sin romper si no está conectado
+    const safeDisconnect = (node: AudioNode | null, label: string) => {
+      if (!node) return
+      try { node.disconnect() } catch (err) { console.warn(`disconnect ${label} falló`, err) }
+    }
 
-      console.log("RNNoise demo corriendo 🚀", {
-        sampleRate: audioContext.sampleRate
-      })
+    // Desconectar para evitar duplicados si ya estaban conectados
+    safeDisconnect(source, 'source')
+    safeDisconnect(rnnoise, 'rnnoise')
+    safeDisconnect(merger, 'merger')
+    safeDisconnect(rawGain, 'rawGain')
+    safeDisconnect(processedGain, 'processedGain')
+
+    // Ruta RAW: source -> rawGain -> destination
+    source!.connect(rawGain!)
+    rawGain!.connect(ac.destination)
+
+    // Ruta PROCESADA: source -> rnnoise -> merger(L/R) -> processedGain -> destination
+    source!.connect(rnnoise!)
+    rnnoise!.connect(merger!, 0, 0)
+    rnnoise!.connect(merger!, 0, 1)
+    merger!.connect(processedGain!)
+    processedGain!.connect(ac.destination)
+  }
+
+  async function start() {
+    try {
+      await ensureGraph()
+      // Activar PROCESADO, mutear RAW
+      processedGainRef.current!.gain.value = 1
+      rawGainRef.current!.gain.value = 0
+      const ac = audioContextRef.current!
+      console.log("RNNoise demo corriendo 🚀", { sampleRate: ac.sampleRate })
     } catch (error) {
       console.error("Error iniciando con supresión de ruido", error)
     }
@@ -76,46 +132,12 @@ function App() {
 
   async function startWithoutNoiseSuppression() {
     try {
-      if (audioContext) {
-        stop()
-      }
-      audioContext = new AudioContext({ sampleRate: 48000 })
-
-      // Pedir micrófono al usuario
-      mediaStream = await navigator.mediaDevices.getUserMedia(mediaConstraints)
-      const source = audioContext.createMediaStreamSource(mediaStream)
-
-      // Conectar directamente: micrófono → parlantes (sin supresión de ruido)
-      source.connect(audioContext.destination)
-
-      // Para poder guardar también el audio procesado, procesamos en paralelo (no se enruta a parlantes)
-      await audioContext.audioWorklet.addModule(NoiseSuppressorWorklet)
-      const noiseSuppressionNode = new AudioWorkletNode(
-        audioContext,
-        NoiseSuppressorWorklet_Name,
-        {
-          channelCount: 1,
-          channelCountMode: 'explicit',
-          channelInterpretation: 'speakers'
-        }
-      )
-      const merger = audioContext.createChannelMerger(2)
-      source.connect(noiseSuppressionNode)
-      noiseSuppressionNode.connect(merger, 0, 0)
-      noiseSuppressionNode.connect(merger, 0, 1)
-
-      // // Preparar destinos para grabación
-      // destinationRaw = audioContext.createMediaStreamDestination()
-      // destinationProcessed = audioContext.createMediaStreamDestination()
-      // source.connect(destinationRaw)
-      // merger.connect(destinationProcessed)
-
-      // // Iniciar grabadores
-      // startRecorders()
-
-      console.log("Audio sin supresión de ruido corriendo 🔊", {
-        sampleRate: audioContext.sampleRate
-      })
+      await ensureGraph()
+      // Activar RAW, mutear PROCESADO
+      rawGainRef.current!.gain.value = 1
+      processedGainRef.current!.gain.value = 0
+      const ac = audioContextRef.current!
+      console.log("Audio sin supresión de ruido corriendo 🔊", { sampleRate: ac.sampleRate })
     } catch (error) {
       console.error("Error iniciando sin supresión de ruido", error)
     }
@@ -203,17 +225,38 @@ function App() {
   //   }
   // }
 
-  function stop() {
+  async function stop() {
     // Detener y guardar grabaciones si existen
     // try { stopAndSaveRecordings() } catch (e) { console.error(e) }
-    if (mediaStream) {
-      mediaStream.getTracks().forEach(track => track.stop())
-      mediaStream = null
+    const ac = audioContextRef.current
+    const stream = mediaStreamRef.current
+
+    try {
+      // Silenciar ambas rutas antes de cortar
+      if (rawGainRef.current) rawGainRef.current.gain.value = 0
+      if (processedGainRef.current) processedGainRef.current.gain.value = 0
+    } catch (err) {
+      console.warn('Error al silenciar rutas', err)
     }
-    if (audioContext) {
-      audioContext.close()
-      audioContext = null
+
+    if (stream) {
+      try { stream.getTracks().forEach(track => track.stop()) } catch (err) { console.warn('Detener tracks falló', err) }
+      mediaStreamRef.current = null
     }
+
+    if (ac) {
+      try { await ac.close() } catch (err) { console.warn('AudioContext.close falló', err) }
+      audioContextRef.current = null
+    }
+
+    // Limpiar referencias de nodos
+    sourceNodeRef.current = null
+    rnnoiseNodeRef.current = null
+    processedMergerRef.current = null
+    rawGainRef.current = null
+    processedGainRef.current = null
+    workletLoadedRef.current = false
+
     console.log("Audio detenido 🛑")
   }
 
