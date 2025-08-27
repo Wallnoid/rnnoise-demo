@@ -49,16 +49,26 @@ function App() {
     const ac = await ensureAudioContext()
     const stream = await ensureMediaStream()
 
+    // Verificar soporte de AudioWorklet y tasa de muestreo esperada
+    const workletHost = ac as unknown as { audioWorklet?: unknown }
+    const hasWorklet = typeof workletHost.audioWorklet !== 'undefined' && typeof AudioWorkletNode !== 'undefined'
+    if (!hasWorklet) {
+      console.warn('AudioWorklet no soportado. El modo con supresión no estará disponible en este navegador.')
+    }
+    if (ac.sampleRate !== 48000) {
+      console.warn(`SampleRate ${ac.sampleRate} Hz (se espera 48000 Hz). En macOS ajusta el micrófono a 48 kHz en Configuración de Audio MIDI.`)
+    }
+
     if (!sourceNodeRef.current) {
       sourceNodeRef.current = ac.createMediaStreamSource(stream)
     }
 
-    if (!workletLoadedRef.current) {
+    if (hasWorklet && !workletLoadedRef.current) {
       await ac.audioWorklet.addModule(NoiseSuppressorWorklet)
       workletLoadedRef.current = true
     }
 
-    if (!rnnoiseNodeRef.current) {
+    if (hasWorklet && !rnnoiseNodeRef.current) {
       rnnoiseNodeRef.current = new AudioWorkletNode(
         ac,
         NoiseSuppressorWorklet_Name,
@@ -82,7 +92,7 @@ function App() {
       await ensureGraph()
       const ac = audioContextRef.current!
       const source = sourceNodeRef.current!
-      const rnnoise = rnnoiseNodeRef.current!
+      const rnnoise = rnnoiseNodeRef.current
       const merger = processedMergerRef.current!
 
       // Desconectar cualquier ruta previa
@@ -94,11 +104,18 @@ function App() {
       safeDisconnect(rnnoise, 'rnnoise')
       safeDisconnect(merger, 'merger')
 
-      // Ruta PROCESADA únicamente: source -> rnnoise -> merger(L/R) -> destination
-      source.connect(rnnoise)
-      rnnoise.connect(merger, 0, 0)
-      rnnoise.connect(merger, 0, 1)
-      merger.connect(ac.destination)
+      // Si no hay RNNoise disponible o sampleRate != 48k, caer a RAW
+      const canProcess = Boolean(rnnoise) && ac.sampleRate === 48000
+      if (!canProcess) {
+        console.warn('Supresión deshabilitada (falta AudioWorklet o sampleRate ≠ 48k). Usando audio crudo.')
+        source.connect(ac.destination)
+      } else {
+        // Ruta PROCESADA únicamente: source -> rnnoise -> merger(L/R) -> destination
+        source.connect(rnnoise!)
+        rnnoise!.connect(merger, 0, 0)
+        rnnoise!.connect(merger, 0, 1)
+        merger.connect(ac.destination)
+      }
 
       console.log("RNNoise demo corriendo 🚀", { sampleRate: ac.sampleRate })
     } catch (error) {
@@ -213,6 +230,7 @@ function App() {
   //     await delay(1200)
   //   }
   // }
+
 
   async function stop() {
     // Detener y guardar grabaciones si existen
