@@ -12,8 +12,6 @@ function App() {
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const rnnoiseNodeRef = useRef<AudioWorkletNode | null>(null)
   const processedMergerRef = useRef<ChannelMergerNode | null>(null)
-  const rawGainRef = useRef<GainNode | null>(null)
-  const processedGainRef = useRef<GainNode | null>(null)
   const workletLoadedRef = useRef<boolean>(false)
 
   const mediaConstraints: MediaStreamConstraints = {
@@ -76,54 +74,32 @@ function App() {
       processedMergerRef.current = ac.createChannelMerger(2)
     }
 
-    if (!rawGainRef.current) {
-      rawGainRef.current = ac.createGain()
-      rawGainRef.current.gain.value = 0
-    }
-    if (!processedGainRef.current) {
-      processedGainRef.current = ac.createGain()
-      processedGainRef.current.gain.value = 0
-    }
-
-    // Conexiones (idempotentes):
-    const source = sourceNodeRef.current
-    const rnnoise = rnnoiseNodeRef.current
-    const merger = processedMergerRef.current
-    const rawGain = rawGainRef.current
-    const processedGain = processedGainRef.current
-
-    // Helper para desconectar sin romper si no está conectado
-    const safeDisconnect = (node: AudioNode | null, label: string) => {
-      if (!node) return
-      try { node.disconnect() } catch (err) { console.warn(`disconnect ${label} falló`, err) }
-    }
-
-    // Desconectar para evitar duplicados si ya estaban conectados
-    safeDisconnect(source, 'source')
-    safeDisconnect(rnnoise, 'rnnoise')
-    safeDisconnect(merger, 'merger')
-    safeDisconnect(rawGain, 'rawGain')
-    safeDisconnect(processedGain, 'processedGain')
-
-    // Ruta RAW: source -> rawGain -> destination
-    source!.connect(rawGain!)
-    rawGain!.connect(ac.destination)
-
-    // Ruta PROCESADA: source -> rnnoise -> merger(L/R) -> processedGain -> destination
-    source!.connect(rnnoise!)
-    rnnoise!.connect(merger!, 0, 0)
-    rnnoise!.connect(merger!, 0, 1)
-    merger!.connect(processedGain!)
-    processedGain!.connect(ac.destination)
+    // No conectamos aquí; las conexiones se realizan al elegir el modo.
   }
 
   async function start() {
     try {
       await ensureGraph()
-      // Activar PROCESADO, mutear RAW
-      processedGainRef.current!.gain.value = 1
-      rawGainRef.current!.gain.value = 0
       const ac = audioContextRef.current!
+      const source = sourceNodeRef.current!
+      const rnnoise = rnnoiseNodeRef.current!
+      const merger = processedMergerRef.current!
+
+      // Desconectar cualquier ruta previa
+      const safeDisconnect = (node: AudioNode | null, label: string) => {
+        if (!node) return
+        try { node.disconnect() } catch (err) { console.warn(`disconnect ${label} falló`, err) }
+      }
+      safeDisconnect(source, 'source')
+      safeDisconnect(rnnoise, 'rnnoise')
+      safeDisconnect(merger, 'merger')
+
+      // Ruta PROCESADA únicamente: source -> rnnoise -> merger(L/R) -> destination
+      source.connect(rnnoise)
+      rnnoise.connect(merger, 0, 0)
+      rnnoise.connect(merger, 0, 1)
+      merger.connect(ac.destination)
+
       console.log("RNNoise demo corriendo 🚀", { sampleRate: ac.sampleRate })
     } catch (error) {
       console.error("Error iniciando con supresión de ruido", error)
@@ -133,10 +109,23 @@ function App() {
   async function startWithoutNoiseSuppression() {
     try {
       await ensureGraph()
-      // Activar RAW, mutear PROCESADO
-      rawGainRef.current!.gain.value = 1
-      processedGainRef.current!.gain.value = 0
       const ac = audioContextRef.current!
+      const source = sourceNodeRef.current!
+      const rnnoise = rnnoiseNodeRef.current!
+      const merger = processedMergerRef.current!
+
+      // Desconectar cualquier ruta previa
+      const safeDisconnect = (node: AudioNode | null, label: string) => {
+        if (!node) return
+        try { node.disconnect() } catch (err) { console.warn(`disconnect ${label} falló`, err) }
+      }
+      safeDisconnect(source, 'source')
+      safeDisconnect(rnnoise, 'rnnoise')
+      safeDisconnect(merger, 'merger')
+
+      // Ruta RAW únicamente: source -> destination
+      source.connect(ac.destination)
+
       console.log("Audio sin supresión de ruido corriendo 🔊", { sampleRate: ac.sampleRate })
     } catch (error) {
       console.error("Error iniciando sin supresión de ruido", error)
@@ -232,9 +221,14 @@ function App() {
     const stream = mediaStreamRef.current
 
     try {
-      // Silenciar ambas rutas antes de cortar
-      if (rawGainRef.current) rawGainRef.current.gain.value = 0
-      if (processedGainRef.current) processedGainRef.current.gain.value = 0
+      // Desconectar rutas activas
+      const safeDisconnect = (node: AudioNode | null, label: string) => {
+        if (!node) return
+        try { node.disconnect() } catch (err) { console.warn(`disconnect ${label} falló`, err) }
+      }
+      safeDisconnect(sourceNodeRef.current, 'source')
+      safeDisconnect(rnnoiseNodeRef.current, 'rnnoise')
+      safeDisconnect(processedMergerRef.current, 'merger')
     } catch (err) {
       console.warn('Error al silenciar rutas', err)
     }
@@ -253,8 +247,6 @@ function App() {
     sourceNodeRef.current = null
     rnnoiseNodeRef.current = null
     processedMergerRef.current = null
-    rawGainRef.current = null
-    processedGainRef.current = null
     workletLoadedRef.current = false
 
     console.log("Audio detenido 🛑")
